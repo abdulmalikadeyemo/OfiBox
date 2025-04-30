@@ -5,15 +5,15 @@ diffusers
 einops
 opencv-python
 numpy
-torch
+#torch
 transformers
-torchvision
-#taming-transformers-rom1504
-#ConfigArgParse
-#ipdb
+#torchvision
+taming-transformers-rom1504
+ConfigArgParse
+ipdb
 omegaconf
 
-#sentencepiece
+sentencepiece
 tqdm
 
 # Mesh Processing
@@ -21,14 +21,14 @@ trimesh
 pymeshlab
 pygltflib
 xatlas
-#kornia
-#facexlib
+kornia
+facexlib
 
 # Training
 accelerate
 #pytorch_lightning
-#scikit-learn
-#scikit-image
+scikit-learn
+scikit-image
 
 # Demo only
 gradio
@@ -38,3 +38,6 @@ rembg
 onnxruntime
 #gevent
 #geventhttpclient
+
+# Model management
+huggingface_hub>=0.14.1
