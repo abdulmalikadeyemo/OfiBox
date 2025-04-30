@@ -12,7 +12,69 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
+# Apply monkey patch to fix TypeError: 'bool' is not iterable
 import os
+import sys
+import types
+import importlib
+
+# Fix for TypeError: argument of type 'bool' is not iterable
+def patch_gradio_client_utils():
+    try:
+        from gradio_client import utils as client_utils
+        
+        # Save the original function
+        original_get_type = client_utils.get_type
+        
+        # Define the fixed version
+        def fixed_get_type(schema):
+            if schema is True or schema is False:
+                return "bool"
+            
+            if isinstance(schema, bool):
+                return "bool"
+                
+            # Use a try-except to handle non-iterable items
+            try:
+                if "const" in schema:
+                    return "Literal"
+                
+                if "enum" in schema:
+                    return "Literal"
+                    
+                if "type" in schema:
+                    typ = schema["type"]
+                    # Handle case where type is a list
+                    if isinstance(typ, list):
+                        if "null" in typ:
+                            return "Optional"
+                        else:
+                            return "Union"
+                    return client_utils.JSON_TO_PYTHON_TYPES.get(typ, "Any")
+                
+                if "allOf" in schema or "anyOf" in schema or "oneOf" in schema:
+                    return "Union"
+                
+                if "items" in schema:
+                    return "List"
+                
+                if schema.get("additionalProperties", False):
+                    return "Dict"
+                
+                return "Any"
+            except (TypeError, AttributeError):
+                return "Any"
+        
+        # Replace the original function
+        client_utils.get_type = fixed_get_type
+        
+        print("Successfully patched gradio_client.utils.get_type to handle bool values")
+    except Exception as e:
+        print(f"Failed to patch gradio_client utils: {e}")
+
+# Apply the patch
+patch_gradio_client_utils()
+
 import random
 import shutil
 import time
@@ -742,6 +804,26 @@ if __name__ == '__main__':
     # https://discuss.huggingface.co/t/how-to-serve-an-html-file/33921/2
     # create a FastAPI app
     app = FastAPI()
+    
+    # Add a simple health check endpoint for debugging connection issues
+    @app.get("/health")
+    def health_check():
+        return {"status": "ok", "message": "Hunyuan3D-2 is running"}
+    
+    # Add proper CORS middleware with explicit WebSocket support
+    from fastapi.middleware.cors import CORSMiddleware
+    # More permissive CORS setup to fix WebSocket issues
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_origin_regex=".*",  # Allow all origins with regex pattern
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+        max_age=3600,  # Cache preflight requests for 1 hour
+    )
+    
     # create a static directory to store the static files
     static_dir = Path(SAVE_DIR).absolute()
     static_dir.mkdir(parents=True, exist_ok=True)
@@ -750,6 +832,26 @@ if __name__ == '__main__':
 
     if args.low_vram_mode:
         torch.cuda.empty_cache()
+    
+    # Build Gradio app
     demo = build_app()
+    
+    # Try different launch approaches based on potential errors
+    try:
+        # Try approach 1: Using FastAPI integration (may have TypeError issue)
+        try:
+            print("Attempting to launch with FastAPI integration...")
     app = gr.mount_gradio_app(app, demo, path="/")
     uvicorn.run(app, host=args.host, port=args.port, workers=1)
+        except TypeError as e:
+            print(f"FastAPI integration failed with TypeError: {e}")
+            print("Falling back to direct launch...")
+            # Clean up FastAPI app resources
+            del app
+            # Approach 2: Launch Gradio directly
+            demo.launch(server_name=args.host, server_port=args.port, share=False)
+    except Exception as e:
+        print(f"All launch attempts failed: {e}")
+        print("Using absolute basic launch method...")
+        # Approach 3: Most basic launch with minimal settings
+        demo.queue().launch(server_name=args.host, server_port=args.port, share=False)
