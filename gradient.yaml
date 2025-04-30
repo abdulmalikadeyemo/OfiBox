@@ -1,0 +1,59 @@
+name: hunyuan3d-api
+type: Deployment
+
+resources:
+  instance-type: A6000
+  shm-size: 16Gi
+
+image: dockerfile
+port: 8000
+
+env:
+  - name: MODELS_DIR
+    value: /storage/models
+  - name: SAVE_DIR
+    value: /storage/gradio_cache
+  - name: NVIDIA_VISIBLE_DEVICES
+    value: all
+  - name: CUDA_VISIBLE_DEVICES
+    value: "0"
+  - name: HUNYUAN3D_BATCH_SIZE
+    value: "4"
+  - name: HUNYUAN3D_NUM_WORKERS
+    value: "4"
+  - name: HUNYUAN3D_CUDA_OPTIMIZATION
+    value: "true"
+  - name: LOG_LEVEL
+    value: "INFO"
+
+volumes:
+  - name: storage
+    type: volume
+    size: 100
+    mountPath: /storage
+
+scaling:
+  minInstances: 1
+  maxInstances: 4
+  targetCPUUtilization: 70
+  targetGPUUtilization: 80
+  scaleDownWindow: 300
+  scaleUpWindow: 120
+
+metrics:
+  enabled: true
+  path: /metrics
+  port: 8000
+
+health:
+  path: /health
+  port: 8000
+  initialDelaySeconds: 60
+  timeoutSeconds: 10
+  periodSeconds: 30
+  failureThreshold: 3
+  successThreshold: 1
+
+commands:
+  pre-start:
+    - pip install prometheus_client 
