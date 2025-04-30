@@ -1,508 +1,455 @@
-# Hunyuan 3D is licensed under the TENCENT HUNYUAN NON-COMMERCIAL LICENSE AGREEMENT
-# except for the third-party components listed below.
-# Hunyuan 3D does not impose any additional limitations beyond what is outlined
-# in the repsective licenses of these third-party components.
-# Users must comply with all terms and conditions of original licenses of these third-party
-# components and must ensure that the usage of the third party components adheres to
-# all relevant laws and regulations.
-
-# For avoidance of doubts, Hunyuan 3D means the large language models and
-# their software and algorithms, including trained model weights, parameters (including
-# optimizer states), machine-learning model code, inference-enabling code, training-enabling code,
-# fine-tuning enabling code and other elements of the foregoing made publicly available
-# by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
-
-# Apply monkey patch to fix TypeError: 'bool' is not iterable
 import os
-import sys
-import types
-import importlib
-
-# Fix for TypeError: argument of type 'bool' is not iterable
-def patch_gradio_client_utils():
-    try:
-        from gradio_client import utils as client_utils
-        
-        # Save the original function
-        original_get_type = client_utils.get_type
-        
-        # Define the fixed version
-        def fixed_get_type(schema):
-            if schema is True or schema is False:
-                return "bool"
-            
-            if isinstance(schema, bool):
-                return "bool"
-                
-            # Use a try-except to handle non-iterable items
-            try:
-                if "const" in schema:
-                    return "Literal"
-                
-                if "enum" in schema:
-                    return "Literal"
-                    
-                if "type" in schema:
-                    typ = schema["type"]
-                    # Handle case where type is a list
-                    if isinstance(typ, list):
-                        if "null" in typ:
-                            return "Optional"
-                        else:
-                            return "Union"
-                    return client_utils.JSON_TO_PYTHON_TYPES.get(typ, "Any")
-                
-                if "allOf" in schema or "anyOf" in schema or "oneOf" in schema:
-                    return "Union"
-                
-                if "items" in schema:
-                    return "List"
-                
-                if schema.get("additionalProperties", False):
-                    return "Dict"
-                
-                return "Any"
-            except (TypeError, AttributeError):
-                return "Any"
-        
-        # Replace the original function
-        client_utils.get_type = fixed_get_type
-        
-        print("Successfully patched gradio_client.utils.get_type to handle bool values")
-    except Exception as e:
-        print(f"Failed to patch gradio_client utils: {e}")
-
-# Apply the patch
-patch_gradio_client_utils()
-
 import random
 import shutil
 import time
-from glob import glob
+import uuid
 from pathlib import Path
+import base64
+from io import BytesIO
+import threading
 
 import gradio as gr
-import torch
-import trimesh
-import uvicorn
+import requests
+from PIL import Image
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-import uuid
+import uvicorn
 
-from hy3dgen.shapegen.utils import logger
+API_URL = 'http://184.105.6.192:8081'
 
+# Configuration
+APP_CONFIG = {
+    # Gradio app settings
+    'host': '0.0.0.0',
+    'port': 8080,
+    
+    # API server settings
+    'api_url': API_URL,  # Replace with your Paperspace public IP
+    
+    # UI settings
+    'title': 'OfiBox Game Asset Generator: Create High-Quality 3D Game Assets',
+    
+    # Cache settings
+    'cache_dir': 'gradio_cache',
+    'max_cache_folders': 200,
+}
+
+# Constants
 MAX_SEED = int(1e7)
+SAVE_DIR = APP_CONFIG['cache_dir']
+os.makedirs(SAVE_DIR, exist_ok=True)
 
+# Model viewer constants and functions
+HTML_HEIGHT = 650
+HTML_WIDTH = 500
+HTML_OUTPUT_PLACEHOLDER = f"""
+<div style='height: {650}px; width: 100%; border-radius: 8px; border-color: #e5e7eb; border-style: solid; border-width: 1px; display: flex; justify-content: center; align-items: center;'>
+  <div style='text-align: center; font-size: 16px; color: #6b7280;'>
+    <p style="color: #8d8d8d;">Welcome to OfiBox Game Asset Generator!</p>
+    <p style="color: #8d8d8d;">Create amazing 3D assets for your games.</p>
+  </div>
+</div>
+"""
 
+class APIStatus:
+    CONNECTED = "🟢 Connected"
+    DISCONNECTED = "🔴 Disconnected"
+    BUSY = "🟡 Busy"
+
+class OfiBoxAPIClient:
+    def __init__(self, api_url=API_URL):
+        self.api_url = api_url.rstrip('/')
+        self._status = APIStatus.DISCONNECTED
+        self._status_lock = threading.Lock()
+        self._start_status_checker()
+        
+    @property
+    def status(self):
+        with self._status_lock:
+            return self._status
+            
+    @status.setter
+    def status(self, value):
+        with self._status_lock:
+            self._status = value
+    
+    def _start_status_checker(self):
+        """Start a background thread to check API status"""
+        def check_status():
+            while True:
+                try:
+                    response = requests.get(f"{self.api_url}/health", timeout=2)
+                    if response.status_code == 200:
+                        self.status = APIStatus.CONNECTED
+                    else:
+                        self.status = APIStatus.DISCONNECTED
+                except:
+                    self.status = APIStatus.DISCONNECTED
+                time.sleep(5)  # Check every 5 seconds
+                
+        thread = threading.Thread(target=check_status, daemon=True)
+        thread.start()
+        
+    def _encode_image(self, image):
+        """Convert PIL Image to base64 string"""
+        if isinstance(image, str):  # If it's a file path
+            with open(image, 'rb') as f:
+                return base64.b64encode(f.read()).decode()
+        
+        # If it's a PIL Image
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        return base64.b64encode(buffered.getvalue()).decode()
+
+    def generate(self, image=None, text=None, params=None):
+        """Synchronous generation request"""
+        if self.status != APIStatus.CONNECTED:
+            raise ConnectionError("Generation server is not available. Please try again later or contact support.")
+            
+        if params is None:
+            params = {}
+            
+        if image:
+            params["image"] = self._encode_image(image)
+        elif text:
+            params["text"] = text
+        else:
+            raise ValueError("Please provide either a reference image or a text description.")
+
+        try:
+            self.status = APIStatus.BUSY
+            response = requests.post(f"{self.api_url}/generate", json=params, timeout=30)
+            response.raise_for_status()
+            
+            # Save the response content to a temporary file
+            save_folder = self._gen_save_folder()
+            output_path = os.path.join(save_folder, "output.glb")
+            with open(output_path, "wb") as f:
+                f.write(response.content)
+            return output_path
+            
+        except requests.exceptions.Timeout:
+            raise ConnectionError("Generation is taking longer than expected. Please try again with simpler parameters.")
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Unable to connect to generation server. Please try again later.")
+        finally:
+            if self.status == APIStatus.BUSY:
+                self.status = APIStatus.CONNECTED
+
+    def send_async(self, image=None, text=None, params=None):
+        """Asynchronous generation request"""
+        if params is None:
+            params = {}
+            
+        if image:
+            params["image"] = self._encode_image(image)
+        elif text:
+            params["text"] = text
+        else:
+            raise ValueError("Either image or text must be provided")
+
+        try:
+            response = requests.post(f"{self.api_url}/send", json=params)
+            response.raise_for_status()
+            return response.json()["uid"]
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to connect to API server: {str(e)}")
+
+    def check_status(self, uid):
+        """Check status of asynchronous generation"""
+        try:
+            response = requests.get(f"{self.api_url}/status/{uid}")
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to connect to API server: {str(e)}")
+
+    def _gen_save_folder(self, max_size=200):
+        """Generate a unique folder for saving outputs"""
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        
+        # Get all folder paths
+        dirs = [f for f in Path(SAVE_DIR).iterdir() if f.is_dir()]
+        
+        # If folder count exceeds max_size, remove oldest folder
+        if len(dirs) >= max_size:
+            oldest_dir = min(dirs, key=lambda x: x.stat().st_ctime)
+            shutil.rmtree(oldest_dir)
+            
+        # Generate new uuid folder name
+        new_folder = os.path.join(SAVE_DIR, str(uuid.uuid4()))
+        os.makedirs(new_folder, exist_ok=True)
+        
+        return new_folder
+
+# Helper functions for the Gradio interface
 def get_example_img_list():
+    """Load example images from assets"""
     print('Loading example img list ...')
-    return sorted(glob('./assets/example_images/**/*.png', recursive=True))
-
+    try:
+        from glob import glob
+        return sorted(glob('./assets/example_images/**/*.png', recursive=True))
+    except Exception:
+        print("Warning: No example images found")
+        return []
 
 def get_example_txt_list():
+    """Load example prompts from assets"""
     print('Loading example txt list ...')
-    txt_list = list()
-    for line in open('./assets/example_prompts.txt', encoding='utf-8'):
-        txt_list.append(line.strip())
+    txt_list = []
+    try:
+        with open('./assets/example_prompts.txt', encoding='utf-8') as f:
+            for line in f:
+                txt_list.append(line.strip())
+    except FileNotFoundError:
+        print("Warning: example_prompts.txt not found")
     return txt_list
 
-
-def get_example_mv_list():
-    print('Loading example mv list ...')
-    mv_list = list()
-    root = './assets/example_mv_images'
-    for mv_dir in os.listdir(root):
-        view_list = []
-        for view in ['front', 'back', 'left', 'right']:
-            path = os.path.join(root, mv_dir, f'{view}.png')
-            if os.path.exists(path):
-                view_list.append(path)
-            else:
-                view_list.append(None)
-        mv_list.append(view_list)
-    return mv_list
-
-
-def gen_save_folder(max_size=200):
-    os.makedirs(SAVE_DIR, exist_ok=True)
-
-    # 获取所有文件夹路径
-    dirs = [f for f in Path(SAVE_DIR).iterdir() if f.is_dir()]
-
-    # 如果文件夹数量超过 max_size，删除创建时间最久的文件夹
-    if len(dirs) >= max_size:
-        # 按创建时间排序，最久的排在前面
-        oldest_dir = min(dirs, key=lambda x: x.stat().st_ctime)
-        shutil.rmtree(oldest_dir)
-        print(f"Removed the oldest folder: {oldest_dir}")
-
-    # 生成一个新的 uuid 文件夹名称
-    new_folder = os.path.join(SAVE_DIR, str(uuid.uuid4()))
-    os.makedirs(new_folder, exist_ok=True)
-    print(f"Created new folder: {new_folder}")
-
-    return new_folder
-
-
-def export_mesh(mesh, save_folder, textured=False, type='glb'):
-    if textured:
-        path = os.path.join(save_folder, f'textured_mesh.{type}')
-    else:
-        path = os.path.join(save_folder, f'white_mesh.{type}')
-    if type not in ['glb', 'obj']:
-        mesh.export(path)
-    else:
-        mesh.export(path, include_normals=textured)
-    return path
-
-
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
+    """Generate random seed if randomize_seed is True"""
     if randomize_seed:
         seed = random.randint(0, MAX_SEED)
-    return seed
+    return seed 
 
+def generation_all(
+    api_client,
+    api_status,
+    caption=None,
+    image=None,
+    steps=50,
+    guidance_scale=7.5,
+    seed=1234,
+    octree_resolution=256,
+    check_box_rembg=False,
+    num_chunks=200000,
+    randomize_seed: bool = False,
+):
+    """Generate both untextured and textured 3D models"""
+    seed = int(randomize_seed_fn(seed, randomize_seed))
+    
+    # Prepare parameters
+    params = {
+        "steps": steps,
+        "guidance_scale": guidance_scale,
+        "seed": seed,
+        "octree_resolution": octree_resolution,
+        "check_box_rembg": check_box_rembg,
+        "num_chunks": num_chunks,
+        "texture": True
+    }
+    
+    try:
+        output_path = api_client.generate(image=image, text=caption, params=params)
+        save_folder = os.path.dirname(output_path)
+        
+        model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH, textured=True)
+        
+        return (
+            gr.update(value=output_path),
+            model_viewer_html,
+            {
+                "Asset Details": {
+                    "Quality Level": steps,
+                    "Style Intensity": guidance_scale,
+                    "Generation ID": seed,
+                    "Resolution": octree_resolution,
+                    "Detail Level": num_chunks,
+                }
+            },
+            seed,
+            api_client.status,
+        )
+    except Exception as e:
+        error_html = f"""
+        <div style='height: {HTML_HEIGHT}px; width: 100%; display: flex; justify-content: center; align-items: center; background-color: #FEF2F2; border-radius: 8px;'>
+            <div style='text-align: center; color: #DC2626;'>
+                <p style='font-size: 1.2em; margin-bottom: 10px;'>⚠️ Generation Failed</p>
+                <p>We couldn't generate your asset: {str(e)}</p>
+                <p style='font-size: 0.9em; margin-top: 10px;'>Try adjusting the generation settings or using a different reference.</p>
+            </div>
+        </div>
+        """
+        return (
+            gr.update(value=None),
+            error_html,
+            {"error": "Asset generation failed. Please try again with different settings."},
+            seed,
+            api_client.status,
+        )
+
+def shape_generation(
+    api_client,
+    api_status,
+    caption=None,
+    image=None,
+    steps=50,
+    guidance_scale=7.5,
+    seed=1234,
+    octree_resolution=256,
+    check_box_rembg=False,
+    num_chunks=200000,
+    randomize_seed: bool = False,
+):
+    """Generate untextured 3D model only"""
+    seed = int(randomize_seed_fn(seed, randomize_seed))
+    
+    # Prepare parameters
+    params = {
+        "steps": steps,
+        "guidance_scale": guidance_scale,
+        "seed": seed,
+        "octree_resolution": octree_resolution,
+        "check_box_rembg": check_box_rembg,
+        "num_chunks": num_chunks,
+        "texture": False  # Request untextured output
+    }
+    
+    try:
+        # Make API request
+        output_path = api_client.generate(image=image, text=caption, params=params)
+        save_folder = os.path.dirname(output_path)
+        
+        # Generate HTML for model viewer
+        model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH)
+        
+        # Return results
+        return (
+            gr.update(value=output_path),  # File output
+            model_viewer_html,  # HTML viewer
+            {"params": params},  # Stats
+            seed,  # Updated seed
+            api_client.status,  # API status
+        )
+    except Exception as e:
+        error_html = f"""
+        <div style='height: {HTML_HEIGHT}px; width: 100%; display: flex; justify-content: center; align-items: center; background-color: #FEF2F2; border-radius: 8px;'>
+            <div style='text-align: center; color: #DC2626;'>
+                <p style='font-size: 1.2em; margin-bottom: 10px;'>⚠️ Generation Failed</p>
+                <p>{str(e)}</p>
+            </div>
+        </div>
+        """
+        return (
+            gr.update(value=None),
+            error_html,
+            {"error": str(e)},
+            seed,
+            api_client.status,
+        )
 
 def build_model_viewer_html(save_folder, height=660, width=790, textured=False):
-    # Remove first folder from path to make relative path
+    """Build HTML for the model viewer"""
     if textured:
         related_path = f"./textured_mesh.glb"
         template_name = './assets/modelviewer-textured-template.html'
         output_html_path = os.path.join(save_folder, f'textured_mesh.html')
     else:
-        related_path = f"./white_mesh.glb"
+        related_path = f"./output.glb"
         template_name = './assets/modelviewer-template.html'
         output_html_path = os.path.join(save_folder, f'white_mesh.html')
+    
     offset = 50 if textured else 10
-    with open(os.path.join(CURRENT_DIR, template_name), 'r', encoding='utf-8') as f:
-        template_html = f.read()
+    
+    try:
+        with open(os.path.join(os.path.dirname(__file__), template_name), 'r', encoding='utf-8') as f:
+            template_html = f.read()
 
-    with open(output_html_path, 'w', encoding='utf-8') as f:
-        template_html = template_html.replace('#height#', f'{height - offset}')
-        template_html = template_html.replace('#width#', f'{width}')
-        template_html = template_html.replace('#src#', f'{related_path}/')
-        f.write(template_html)
+        with open(output_html_path, 'w', encoding='utf-8') as f:
+            template_html = template_html.replace('#height#', f'{height - offset}')
+            template_html = template_html.replace('#width#', f'{width}')
+            template_html = template_html.replace('#src#', f'{related_path}/')
+            f.write(template_html)
 
-    rel_path = os.path.relpath(output_html_path, SAVE_DIR)
-    iframe_tag = f'<iframe src="/static/{rel_path}" height="{height}" width="100%" frameborder="0"></iframe>'
-    print(
-        f'Find html file {output_html_path}, {os.path.exists(output_html_path)}, relative HTML path is /static/{rel_path}')
-
-    return f"""
-        <div style='height: {height}; width: 100%;'>
-        {iframe_tag}
-        </div>
-    """
-
-
-def _gen_shape(
-    caption=None,
-    image=None,
-    mv_image_front=None,
-    mv_image_back=None,
-    mv_image_left=None,
-    mv_image_right=None,
-    steps=50,
-    guidance_scale=7.5,
-    seed=1234,
-    octree_resolution=256,
-    check_box_rembg=False,
-    num_chunks=200000,
-    randomize_seed: bool = False,
-):
-    if not MV_MODE and image is None and caption is None:
-        raise gr.Error("Please provide either a caption or an image.")
-    if MV_MODE:
-        if mv_image_front is None and mv_image_back is None and mv_image_left is None and mv_image_right is None:
-            raise gr.Error("Please provide at least one view image.")
-        image = {}
-        if mv_image_front:
-            image['front'] = mv_image_front
-        if mv_image_back:
-            image['back'] = mv_image_back
-        if mv_image_left:
-            image['left'] = mv_image_left
-        if mv_image_right:
-            image['right'] = mv_image_right
-
-    seed = int(randomize_seed_fn(seed, randomize_seed))
-
-    octree_resolution = int(octree_resolution)
-    if caption: print('prompt is', caption)
-    save_folder = gen_save_folder()
-    stats = {
-        'model': {
-            'shapegen': f'{args.model_path}/{args.subfolder}',
-            'texgen': f'{args.texgen_model_path}',
-        },
-        'params': {
-            'caption': caption,
-            'steps': steps,
-            'guidance_scale': guidance_scale,
-            'seed': seed,
-            'octree_resolution': octree_resolution,
-            'check_box_rembg': check_box_rembg,
-            'num_chunks': num_chunks,
-        }
-    }
-    time_meta = {}
-
-    if image is None:
-        start_time = time.time()
-        try:
-            image = t2i_worker(caption)
-        except Exception as e:
-            raise gr.Error(f"Text to 3D is disable. Please enable it by `python gradio_app.py --enable_t23d`.")
-        time_meta['text2image'] = time.time() - start_time
-
-    # remove disk io to make responding faster, uncomment at your will.
-    # image.save(os.path.join(save_folder, 'input.png'))
-    if MV_MODE:
-        start_time = time.time()
-        for k, v in image.items():
-            if check_box_rembg or v.mode == "RGB":
-                img = rmbg_worker(v.convert('RGB'))
-                image[k] = img
-        time_meta['remove background'] = time.time() - start_time
-    else:
-        if check_box_rembg or image.mode == "RGB":
-            start_time = time.time()
-            image = rmbg_worker(image.convert('RGB'))
-            time_meta['remove background'] = time.time() - start_time
-
-    # remove disk io to make responding faster, uncomment at your will.
-    # image.save(os.path.join(save_folder, 'rembg.png'))
-
-    # image to white model
-    start_time = time.time()
-
-    generator = torch.Generator()
-    generator = generator.manual_seed(int(seed))
-    outputs = i23d_worker(
-        image=image,
-        num_inference_steps=steps,
-        guidance_scale=guidance_scale,
-        generator=generator,
-        octree_resolution=octree_resolution,
-        num_chunks=num_chunks,
-        output_type='mesh'
-    )
-    time_meta['shape generation'] = time.time() - start_time
-    logger.info("---Shape generation takes %s seconds ---" % (time.time() - start_time))
-
-    tmp_start = time.time()
-    mesh = export_to_trimesh(outputs)[0]
-    time_meta['export to trimesh'] = time.time() - tmp_start
-
-    stats['number_of_faces'] = mesh.faces.shape[0]
-    stats['number_of_vertices'] = mesh.vertices.shape[0]
-
-    stats['time'] = time_meta
-    main_image = image if not MV_MODE else image['front']
-    return mesh, main_image, save_folder, stats, seed
-
-
-def generation_all(
-    caption=None,
-    image=None,
-    mv_image_front=None,
-    mv_image_back=None,
-    mv_image_left=None,
-    mv_image_right=None,
-    steps=50,
-    guidance_scale=7.5,
-    seed=1234,
-    octree_resolution=256,
-    check_box_rembg=False,
-    num_chunks=200000,
-    randomize_seed: bool = False,
-):
-    start_time_0 = time.time()
-    mesh, image, save_folder, stats, seed = _gen_shape(
-        caption,
-        image,
-        mv_image_front=mv_image_front,
-        mv_image_back=mv_image_back,
-        mv_image_left=mv_image_left,
-        mv_image_right=mv_image_right,
-        steps=steps,
-        guidance_scale=guidance_scale,
-        seed=seed,
-        octree_resolution=octree_resolution,
-        check_box_rembg=check_box_rembg,
-        num_chunks=num_chunks,
-        randomize_seed=randomize_seed,
-    )
-    path = export_mesh(mesh, save_folder, textured=False)
-
-    # tmp_time = time.time()
-    # mesh = floater_remove_worker(mesh)
-    # mesh = degenerate_face_remove_worker(mesh)
-    # logger.info("---Postprocessing takes %s seconds ---" % (time.time() - tmp_time))
-    # stats['time']['postprocessing'] = time.time() - tmp_time
-
-    tmp_time = time.time()
-    mesh = face_reduce_worker(mesh)
-    logger.info("---Face Reduction takes %s seconds ---" % (time.time() - tmp_time))
-    stats['time']['face reduction'] = time.time() - tmp_time
-
-    tmp_time = time.time()
-    textured_mesh = texgen_worker(mesh, image)
-    logger.info("---Texture Generation takes %s seconds ---" % (time.time() - tmp_time))
-    stats['time']['texture generation'] = time.time() - tmp_time
-    stats['time']['total'] = time.time() - start_time_0
-
-    textured_mesh.metadata['extras'] = stats
-    path_textured = export_mesh(textured_mesh, save_folder, textured=True)
-    model_viewer_html_textured = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH,
-                                                         textured=True)
-    if args.low_vram_mode:
-        torch.cuda.empty_cache()
-    return (
-        gr.update(value=path),
-        gr.update(value=path_textured),
-        model_viewer_html_textured,
-        stats,
-        seed,
-    )
-
-
-def shape_generation(
-    caption=None,
-    image=None,
-    mv_image_front=None,
-    mv_image_back=None,
-    mv_image_left=None,
-    mv_image_right=None,
-    steps=50,
-    guidance_scale=7.5,
-    seed=1234,
-    octree_resolution=256,
-    check_box_rembg=False,
-    num_chunks=200000,
-    randomize_seed: bool = False,
-):
-    start_time_0 = time.time()
-    mesh, image, save_folder, stats, seed = _gen_shape(
-        caption,
-        image,
-        mv_image_front=mv_image_front,
-        mv_image_back=mv_image_back,
-        mv_image_left=mv_image_left,
-        mv_image_right=mv_image_right,
-        steps=steps,
-        guidance_scale=guidance_scale,
-        seed=seed,
-        octree_resolution=octree_resolution,
-        check_box_rembg=check_box_rembg,
-        num_chunks=num_chunks,
-        randomize_seed=randomize_seed,
-    )
-    stats['time']['total'] = time.time() - start_time_0
-    mesh.metadata['extras'] = stats
-
-    path = export_mesh(mesh, save_folder, textured=False)
-    model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH)
-    if args.low_vram_mode:
-        torch.cuda.empty_cache()
-    return (
-        gr.update(value=path),
-        model_viewer_html,
-        stats,
-        seed,
-    )
-
+        rel_path = os.path.relpath(output_html_path, SAVE_DIR)
+        iframe_tag = f'<iframe src="/static/{rel_path}" height="{height}" width="100%" frameborder="0"></iframe>'
+        
+        return f"""
+            <div style='height: {height}; width: 100%;'>
+            {iframe_tag}
+            </div>
+        """
+    except FileNotFoundError:
+        return f"""
+            <div style='height: {height}px; width: 100%; display: flex; justify-content: center; align-items: center;'>
+                <div style='text-align: center; color: red;'>
+                    Error: Model viewer template not found. Please ensure the assets directory is present.
+                </div>
+            </div>
+        """
 
 def build_app():
-    title = 'Hunyuan3D-2: High Resolution Textured 3D Assets Generation'
-    if MV_MODE:
-        title = 'Hunyuan3D-2mv: Image to 3D Generation with 1-4 Views'
-    if 'mini' in args.subfolder:
-        title = 'Hunyuan3D-2mini: Strong 0.6B Image to Shape Generator'
-    if TURBO_MODE:
-        title = title.replace(':', '-Turbo: Fast ')
-
-    title_html = f"""
-    <div style="font-size: 2em; font-weight: bold; text-align: center; margin-bottom: 5px">
-
-    {title}
-    </div>
-    <div align="center">
-    Tencent Hunyuan3D Team
-    </div>
-    <div align="center">
-      <a href="https://github.com/tencent/Hunyuan3D-2">Github</a> &ensp; 
-      <a href="http://3d-models.hunyuan.tencent.com">Homepage</a> &ensp;
-      <a href="https://3d.hunyuan.tencent.com">Hunyuan3D Studio</a> &ensp;
-      <a href="#">Technical Report</a> &ensp;
-      <a href="https://huggingface.co/Tencent/Hunyuan3D-2"> Pretrained Models</a> &ensp;
-    </div>
-    """
+    """Build the Gradio interface"""
+    # Initialize API client
+    api_client = OfiBoxAPIClient(APP_CONFIG['api_url'])
+    
+    # Custom CSS
     custom_css = """
     .app.svelte-wpkpf6.svelte-wpkpf6:not(.fill_width) {
         max-width: 1480px;
     }
-    .mv-image button .wrap {
-        font-size: 10px;
+    .api-status {
+        text-align: center;
+        padding: 5px;
+        border-radius: 4px;
+        margin: 5px 0;
     }
-
-    .mv-image .icon-wrap {
-        width: 20px;
-    }
-
     """
 
-    with gr.Blocks(theme=gr.themes.Base(), title='Hunyuan-3D-2.0', analytics_enabled=False, css=custom_css) as demo:
+    with gr.Blocks(
+        theme=gr.themes.Base(),
+        title='OfiBox Game Asset Generator',
+        analytics_enabled=False,
+        css=custom_css
+    ) as demo:
+        title_html = f"""
+        <div style="font-size: 2em; font-weight: bold; text-align: center; margin-bottom: 5px">
+        {APP_CONFIG['title']}
+        </div>
+        """
         gr.HTML(title_html)
+        
+        # API Status indicator
+        api_status = gr.Textbox(
+            value=api_client.status,
+            label="Server Status",
+            interactive=False,
+            container=False,
+            elem_classes=["api-status"]
+        )
+        
+        gr.HTML(f"""
+        <div align="center">
+        OfiBox Game Asset Generator - Powered by Advanced AI Technology
+        </div>
+        """)
 
         with gr.Row():
             with gr.Column(scale=3):
-                with gr.Tabs(selected='tab_img_prompt') as tabs_prompt:
-                    with gr.Tab('Image Prompt', id='tab_img_prompt', visible=not MV_MODE) as tab_ip:
-                        image = gr.Image(label='Image', type='pil', image_mode='RGBA', height=290)
+                with gr.Tabs() as tabs_prompt:
+                    with gr.Tab('Image Reference', id='tab_img_prompt'):
+                        image = gr.Image(label='Reference Image', type='pil', image_mode='RGBA', height=290)
 
-                    with gr.Tab('Text Prompt', id='tab_txt_prompt', visible=HAS_T2I and not MV_MODE) as tab_tp:
-                        caption = gr.Textbox(label='Text Prompt',
-                                             placeholder='HunyuanDiT will be used to generate image.',
-                                             info='Example: A 3D model of a cute cat, white background')
-                    with gr.Tab('MultiView Prompt', visible=MV_MODE) as tab_mv:
-                        # gr.Label('Please upload at least one front image.')
-                        with gr.Row():
-                            mv_image_front = gr.Image(label='Front', type='pil', image_mode='RGBA', height=140,
-                                                      min_width=100, elem_classes='mv-image')
-                            mv_image_back = gr.Image(label='Back', type='pil', image_mode='RGBA', height=140,
-                                                     min_width=100, elem_classes='mv-image')
-                        with gr.Row():
-                            mv_image_left = gr.Image(label='Left', type='pil', image_mode='RGBA', height=140,
-                                                     min_width=100, elem_classes='mv-image')
-                            mv_image_right = gr.Image(label='Right', type='pil', image_mode='RGBA', height=140,
-                                                      min_width=100, elem_classes='mv-image')
+                    with gr.Tab('Text Description', id='tab_txt_prompt'):
+                        caption = gr.Textbox(
+                            label='Asset Description',
+                            placeholder='Describe the game asset you want to create',
+                            info='Example: A low-poly treasure chest with golden details and rustic wood texture'
+                        )
 
                 with gr.Row():
-                    btn = gr.Button(value='Gen Shape', variant='primary', min_width=100)
-                    btn_all = gr.Button(value='Gen Textured Shape',
-                                        variant='primary',
-                                        visible=HAS_TEXTUREGEN,
-                                        min_width=100)
+                    btn = gr.Button(value='Generate Base Model', variant='primary', min_width=100)
+                    btn_all = gr.Button(value='Generate Textured Model', variant='primary', min_width=100)
 
                 with gr.Group():
-                    file_out = gr.File(label="File", visible=False)
-                    file_out2 = gr.File(label="File", visible=False)
+                    file_out = gr.File(label="Generated Asset", visible=False)
 
-                with gr.Tabs(selected='tab_options' if TURBO_MODE else 'tab_export'):
-                    with gr.Tab("Options", id='tab_options', visible=TURBO_MODE):
-                        gen_mode = gr.Radio(label='Generation Mode',
-                                            info='Recommendation: Turbo for most cases, Fast for very complex cases, Standard seldom use.',
-                                            choices=['Turbo', 'Fast', 'Standard'], value='Turbo')
-                        decode_mode = gr.Radio(label='Decoding Mode',
-                                               info='The resolution for exporting mesh from generated vectset',
-                                               choices=['Low', 'Standard', 'High'],
-                                               value='Standard')
-                    with gr.Tab('Advanced Options', id='tab_advanced_options'):
+                with gr.Tabs():
+                    with gr.Tab('Generation Settings', id='tab_advanced_options'):
                         with gr.Row():
                             check_box_rembg = gr.Checkbox(value=True, label='Remove Background', min_width=100)
-                            randomize_seed = gr.Checkbox(label="Randomize seed", value=True, min_width=100)
+                            randomize_seed = gr.Checkbox(label="Randomize Generation", value=True, min_width=100)
                         seed = gr.Slider(
-                            label="Seed",
+                            label="Generation Seed",
                             minimum=0,
                             maximum=MAX_SEED,
                             step=1,
@@ -511,88 +458,58 @@ def build_app():
                         )
                         with gr.Row():
                             num_steps = gr.Slider(maximum=100,
-                                                  minimum=1,
-                                                  value=5 if 'turbo' in args.subfolder else 30,
-                                                  step=1, label='Inference Steps')
-                            octree_resolution = gr.Slider(maximum=512, minimum=16, value=256, label='Octree Resolution')
+                                                minimum=1,
+                                                value=30,
+                                                step=1,
+                                                label='Quality Steps')
+                            octree_resolution = gr.Slider(maximum=512,
+                                                        minimum=16,
+                                                        value=256,
+                                                        label='Model Resolution')
                         with gr.Row():
-                            cfg_scale = gr.Number(value=5.0, label='Guidance Scale', min_width=100)
-                            num_chunks = gr.Slider(maximum=5000000, minimum=1000, value=8000,
-                                                   label='Number of Chunks', min_width=100)
-                    with gr.Tab("Export", id='tab_export'):
-                        with gr.Row():
-                            file_type = gr.Dropdown(label='File Type', choices=SUPPORTED_FORMATS,
-                                                    value='glb', min_width=100)
-                            reduce_face = gr.Checkbox(label='Simplify Mesh', value=False, min_width=100)
-                            export_texture = gr.Checkbox(label='Include Texture', value=False,
-                                                         visible=False, min_width=100)
-                        target_face_num = gr.Slider(maximum=1000000, minimum=100, value=10000,
-                                                    label='Target Face Number')
-                        with gr.Row():
-                            confirm_export = gr.Button(value="Transform", min_width=100)
-                            file_export = gr.DownloadButton(label="Download", variant='primary',
-                                                            interactive=False, min_width=100)
+                            cfg_scale = gr.Number(value=5.0,
+                                                label='Style Strength',
+                                                min_width=100)
+                            num_chunks = gr.Slider(maximum=5000000,
+                                                minimum=1000,
+                                                value=8000,
+                                                label='Detail Level',
+                                                min_width=100)
 
             with gr.Column(scale=6):
-                with gr.Tabs(selected='gen_mesh_panel') as tabs_output:
-                    with gr.Tab('Generated Mesh', id='gen_mesh_panel'):
-                        html_gen_mesh = gr.HTML(HTML_OUTPUT_PLACEHOLDER, label='Output')
-                    with gr.Tab('Exporting Mesh', id='export_mesh_panel'):
-                        html_export_mesh = gr.HTML(HTML_OUTPUT_PLACEHOLDER, label='Output')
-                    with gr.Tab('Mesh Statistic', id='stats_panel'):
-                        stats = gr.Json({}, label='Mesh Stats')
+                with gr.Tabs() as tabs_output:
+                    with gr.Tab('Generated Asset Preview', id='gen_mesh_panel'):
+                        html_gen_mesh = gr.HTML(HTML_OUTPUT_PLACEHOLDER, label='3D Preview')
+                    with gr.Tab('Asset Information', id='stats_panel'):
+                        stats = gr.JSON({}, label='Generation Stats')
 
-            with gr.Column(scale=3 if MV_MODE else 2):
-                with gr.Tabs(selected='tab_img_gallery') as gallery:
-                    with gr.Tab('Image to 3D Gallery', id='tab_img_gallery', visible=not MV_MODE) as tab_gi:
+            with gr.Column(scale=2):
+                with gr.Tabs() as gallery:
+                    with gr.Tab('Reference Gallery', id='tab_img_gallery'):
                         with gr.Row():
-                            gr.Examples(examples=example_is, inputs=[image],
-                                        label=None, examples_per_page=18)
+                            gr.Examples(
+                                examples=get_example_img_list(),
+                                inputs=[image],
+                                label=None,
+                                examples_per_page=18
+                            )
 
-                    with gr.Tab('Text to 3D Gallery', id='tab_txt_gallery', visible=HAS_T2I and not MV_MODE) as tab_gt:
+                    with gr.Tab('Example Descriptions', id='tab_txt_gallery'):
                         with gr.Row():
-                            gr.Examples(examples=example_ts, inputs=[caption],
-                                        label=None, examples_per_page=18)
-                    with gr.Tab('MultiView to 3D Gallery', id='tab_mv_gallery', visible=MV_MODE) as tab_mv:
-                        with gr.Row():
-                            gr.Examples(examples=example_mvs,
-                                        inputs=[mv_image_front, mv_image_back, mv_image_left, mv_image_right],
-                                        label=None, examples_per_page=6)
+                            gr.Examples(
+                                examples=get_example_txt_list(),
+                                inputs=[caption],
+                                label=None,
+                                examples_per_page=18
+                            )
 
-        gr.HTML(f"""
-        <div align="center">
-        Activated Model - Shape Generation ({args.model_path}/{args.subfolder}) ; Texture Generation ({'Hunyuan3D-2' if HAS_TEXTUREGEN else 'Unavailable'})
-        </div>
-        """)
-        if not HAS_TEXTUREGEN:
-            gr.HTML("""
-            <div style="margin-top: 5px;"  align="center">
-                <b>Warning: </b>
-                Texture synthesis is disable due to missing requirements,
-                 please install requirements following <a href="https://github.com/Tencent/Hunyuan3D-2?tab=readme-ov-file#install-requirements">README.md</a>to activate it.
-            </div>
-            """)
-        if not args.enable_t23d:
-            gr.HTML("""
-            <div style="margin-top: 5px;"  align="center">
-                <b>Warning: </b>
-                Text to 3D is disable. To activate it, please run `python gradio_app.py --enable_t23d`.
-            </div>
-            """)
-
-        tab_ip.select(fn=lambda: gr.update(selected='tab_img_gallery'), outputs=gallery)
-        if HAS_T2I:
-            tab_tp.select(fn=lambda: gr.update(selected='tab_txt_gallery'), outputs=gallery)
-
+        # Set up event handlers
         btn.click(
-            shape_generation,
+            fn=lambda *args: shape_generation(api_client, *args),
             inputs=[
+                api_status,
                 caption,
                 image,
-                mv_image_front,
-                mv_image_back,
-                mv_image_left,
-                mv_image_right,
                 num_steps,
                 cfg_scale,
                 seed,
@@ -601,25 +518,15 @@ def build_app():
                 num_chunks,
                 randomize_seed,
             ],
-            outputs=[file_out, html_gen_mesh, stats, seed]
-        ).then(
-            lambda: (gr.update(visible=False, value=False), gr.update(interactive=True), gr.update(interactive=True),
-                     gr.update(interactive=False)),
-            outputs=[export_texture, reduce_face, confirm_export, file_export],
-        ).then(
-            lambda: gr.update(selected='gen_mesh_panel'),
-            outputs=[tabs_output],
+            outputs=[file_out, html_gen_mesh, stats, seed, api_status]
         )
 
         btn_all.click(
-            generation_all,
+            fn=lambda *args: generation_all(api_client, *args),
             inputs=[
+                api_status,
                 caption,
                 image,
-                mv_image_front,
-                mv_image_back,
-                mv_image_left,
-                mv_image_right,
                 num_steps,
                 cfg_scale,
                 seed,
@@ -628,230 +535,33 @@ def build_app():
                 num_chunks,
                 randomize_seed,
             ],
-            outputs=[file_out, file_out2, html_gen_mesh, stats, seed]
-        ).then(
-            lambda: (gr.update(visible=True, value=True), gr.update(interactive=False), gr.update(interactive=True),
-                     gr.update(interactive=False)),
-            outputs=[export_texture, reduce_face, confirm_export, file_export],
-        ).then(
-            lambda: gr.update(selected='gen_mesh_panel'),
-            outputs=[tabs_output],
+            outputs=[file_out, html_gen_mesh, stats, seed, api_status]
         )
 
-        def on_gen_mode_change(value):
-            if value == 'Turbo':
-                return gr.update(value=5)
-            elif value == 'Fast':
-                return gr.update(value=10)
-            else:
-                return gr.update(value=30)
-
-        gen_mode.change(on_gen_mode_change, inputs=[gen_mode], outputs=[num_steps])
-
-        def on_decode_mode_change(value):
-            if value == 'Low':
-                return gr.update(value=196)
-            elif value == 'Standard':
-                return gr.update(value=256)
-            else:
-                return gr.update(value=384)
-
-        decode_mode.change(on_decode_mode_change, inputs=[decode_mode], outputs=[octree_resolution])
-
-        def on_export_click(file_out, file_out2, file_type, reduce_face, export_texture, target_face_num):
-            if file_out is None:
-                raise gr.Error('Please generate a mesh first.')
-
-            print(f'exporting {file_out}')
-            print(f'reduce face to {target_face_num}')
-            if export_texture:
-                mesh = trimesh.load(file_out2)
-                save_folder = gen_save_folder()
-                path = export_mesh(mesh, save_folder, textured=True, type=file_type)
-
-                # for preview
-                save_folder = gen_save_folder()
-                _ = export_mesh(mesh, save_folder, textured=True)
-                model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH,
-                                                            textured=True)
-            else:
-                mesh = trimesh.load(file_out)
-                mesh = floater_remove_worker(mesh)
-                mesh = degenerate_face_remove_worker(mesh)
-                if reduce_face:
-                    mesh = face_reduce_worker(mesh, target_face_num)
-                save_folder = gen_save_folder()
-                path = export_mesh(mesh, save_folder, textured=False, type=file_type)
-
-                # for preview
-                save_folder = gen_save_folder()
-                _ = export_mesh(mesh, save_folder, textured=False)
-                model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH,
-                                                            textured=False)
-            print(f'export to {path}')
-            return model_viewer_html, gr.update(value=path, interactive=True)
-
-        confirm_export.click(
-            lambda: gr.update(selected='export_mesh_panel'),
-            outputs=[tabs_output],
-        ).then(
-            on_export_click,
-            inputs=[file_out, file_out2, file_type, reduce_face, export_texture, target_face_num],
-            outputs=[html_export_mesh, file_export]
-        )
+        # Update API status periodically
+        api_status.change(None, [], [])  # This creates a dummy event loop
+        demo.load(lambda: api_client.status, outputs=[api_status])
 
     return demo
 
-
-if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default='tencent/Hunyuan3D-2mini')
-    parser.add_argument("--subfolder", type=str, default='hunyuan3d-dit-v2-mini-turbo')
-    parser.add_argument("--texgen_model_path", type=str, default='tencent/Hunyuan3D-2')
-    parser.add_argument('--port', type=int, default=8080)
-    parser.add_argument('--host', type=str, default='0.0.0.0')
-    parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--mc_algo', type=str, default='mc')
-    parser.add_argument('--cache-path', type=str, default='gradio_cache')
-    parser.add_argument('--enable_t23d', action='store_true')
-    parser.add_argument('--disable_tex', action='store_true')
-    parser.add_argument('--enable_flashvdm', action='store_true')
-    parser.add_argument('--compile', action='store_true')
-    parser.add_argument('--low_vram_mode', action='store_true')
-    args = parser.parse_args()
-
-    SAVE_DIR = args.cache_path
-    os.makedirs(SAVE_DIR, exist_ok=True)
-
-    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-    MV_MODE = 'mv' in args.model_path
-    TURBO_MODE = 'turbo' in args.subfolder
-
-    HTML_HEIGHT = 690 if MV_MODE else 650
-    HTML_WIDTH = 500
-    HTML_OUTPUT_PLACEHOLDER = f"""
-    <div style='height: {650}px; width: 100%; border-radius: 8px; border-color: #e5e7eb; border-style: solid; border-width: 1px; display: flex; justify-content: center; align-items: center;'>
-      <div style='text-align: center; font-size: 16px; color: #6b7280;'>
-        <p style="color: #8d8d8d;">Welcome to Hunyuan3D!</p>
-        <p style="color: #8d8d8d;">No mesh here.</p>
-      </div>
-    </div>
-    """
-
-    INPUT_MESH_HTML = """
-    <div style='height: 490px; width: 100%; border-radius: 8px; 
-    border-color: #e5e7eb; order-style: solid; border-width: 1px;'>
-    </div>
-    """
-    example_is = get_example_img_list()
-    example_ts = get_example_txt_list()
-    example_mvs = get_example_mv_list()
-
-    SUPPORTED_FORMATS = ['glb', 'obj', 'ply', 'stl']
-
-    HAS_TEXTUREGEN = False
-    if not args.disable_tex:
-        try:
-            from hy3dgen.texgen import Hunyuan3DPaintPipeline
-
-            texgen_worker = Hunyuan3DPaintPipeline.from_pretrained(args.texgen_model_path)
-            if args.low_vram_mode:
-                texgen_worker.enable_model_cpu_offload()
-            # Not help much, ignore for now.
-            # if args.compile:
-            #     texgen_worker.models['delight_model'].pipeline.unet.compile()
-            #     texgen_worker.models['delight_model'].pipeline.vae.compile()
-            #     texgen_worker.models['multiview_model'].pipeline.unet.compile()
-            #     texgen_worker.models['multiview_model'].pipeline.vae.compile()
-            HAS_TEXTUREGEN = True
-        except Exception as e:
-            print(e)
-            print("Failed to load texture generator.")
-            print('Please try to install requirements by following README.md')
-            HAS_TEXTUREGEN = False
-
-    HAS_T2I = True
-    if args.enable_t23d:
-        from hy3dgen.text2image import HunyuanDiTPipeline
-
-        t2i_worker = HunyuanDiTPipeline('Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled', device=args.device)
-        HAS_T2I = True
-
-    from hy3dgen.shapegen import FaceReducer, FloaterRemover, DegenerateFaceRemover, MeshSimplifier, \
-        Hunyuan3DDiTFlowMatchingPipeline
-    from hy3dgen.shapegen.pipelines import export_to_trimesh
-    from hy3dgen.rembg import BackgroundRemover
-
-    rmbg_worker = BackgroundRemover()
-    i23d_worker = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-        args.model_path,
-        subfolder=args.subfolder,
-        use_safetensors=True,
-        device=args.device,
-    )
-    if args.enable_flashvdm:
-        mc_algo = 'mc' if args.device in ['cpu', 'mps'] else args.mc_algo
-        i23d_worker.enable_flashvdm(mc_algo=mc_algo)
-    if args.compile:
-        i23d_worker.compile()
-
-    floater_remove_worker = FloaterRemover()
-    degenerate_face_remove_worker = DegenerateFaceRemover()
-    face_reduce_worker = FaceReducer()
-
-    # https://discuss.huggingface.co/t/how-to-serve-an-html-file/33921/2
-    # create a FastAPI app
+if __name__ == "__main__":
+    # Create FastAPI app
     app = FastAPI()
     
-    # Add a simple health check endpoint for debugging connection issues
-    @app.get("/health")
-    def health_check():
-        return {"status": "ok", "message": "Hunyuan3D-2 is running"}
-    
-    # Add proper CORS middleware with explicit WebSocket support
-    from fastapi.middleware.cors import CORSMiddleware
-    # More permissive CORS setup to fix WebSocket issues
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_origin_regex=".*",  # Allow all origins with regex pattern
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["*"],
-        max_age=3600,  # Cache preflight requests for 1 hour
-    )
-    
-    # create a static directory to store the static files
+    # Mount static directory for model viewer
     static_dir = Path(SAVE_DIR).absolute()
     static_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=static_dir, html=True), name="static")
-    shutil.copytree('./assets/env_maps', os.path.join(static_dir, 'env_maps'), dirs_exist_ok=True)
-
-    if args.low_vram_mode:
-        torch.cuda.empty_cache()
     
-    # Build Gradio app
+    # Copy environment maps if they exist
+    env_maps_src = './assets/env_maps'
+    env_maps_dst = os.path.join(static_dir, 'env_maps')
+    if os.path.exists(env_maps_src):
+        shutil.copytree(env_maps_src, env_maps_dst, dirs_exist_ok=True)
+    
+    # Build and mount Gradio app
     demo = build_app()
-    
-    # Try different launch approaches based on potential errors
-    try:
-        # Try approach 1: Using FastAPI integration (may have TypeError issue)
-        try:
-            print("Attempting to launch with FastAPI integration...")
     app = gr.mount_gradio_app(app, demo, path="/")
-    uvicorn.run(app, host=args.host, port=args.port, workers=1)
-        except TypeError as e:
-            print(f"FastAPI integration failed with TypeError: {e}")
-            print("Falling back to direct launch...")
-            # Clean up FastAPI app resources
-            del app
-            # Approach 2: Launch Gradio directly
-            demo.launch(server_name=args.host, server_port=args.port, share=False)
-    except Exception as e:
-        print(f"All launch attempts failed: {e}")
-        print("Using absolute basic launch method...")
-        # Approach 3: Most basic launch with minimal settings
-        demo.queue().launch(server_name=args.host, server_port=args.port, share=False)
+    
+    # Run the server
+    uvicorn.run(app, host=APP_CONFIG['host'], port=APP_CONFIG['port']) 
