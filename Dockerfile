@@ -1,4 +1,4 @@
-FROM paperspace/fastapi-deployment:latest
+FROM --platform=linux/amd64 paperspace/fastapi-deployment:latest
 
 WORKDIR /app
 
