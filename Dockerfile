@@ -16,4 +16,4 @@ RUN python3 setup.py install
 
 WORKDIR /app
 
-CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "80"]
+CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "80", "--enable_tex", "--enable_t2i"]
