@@ -35,7 +35,7 @@ import requests
 import base64
 from io import BytesIO
 
-API_BASE_URL = "http://localhost:8081"  # or whatever port your api_server is running on
+API_BASE_URL = "http://184.105.4.46:8081"  # or whatever port your api_server is running on
 HAS_T2I=True
 
 def call_api_generate(params):
@@ -326,11 +326,11 @@ def generation_all(
     mv_image_left=None,
     mv_image_right=None,
     steps=50,
-    guidance_scale=7.5,
+    guidance_scale=5.5,
     seed=1234,
-    octree_resolution=256,
+    octree_resolution=512,
     check_box_rembg=False,
-    num_chunks=200000,
+    num_chunks=20000,
     randomize_seed: bool = False,
 ):
     if not MV_MODE and image is None and caption is None:
@@ -361,9 +361,14 @@ def generation_all(
     try:
         # Call API directly
         response = requests.post(f"{API_BASE_URL}/generate", json=params)
+
+        
         if response.status_code != 200:
             raise Exception(f"API call failed: {response.text}")
         
+        print("--------------------------------")
+        print("successfully got a response from the API")
+        print("--------------------------------")
         # Save the response to a temporary file
         save_folder = gen_save_folder()
         temp_path = os.path.join(save_folder, "temp.glb")
@@ -371,7 +376,9 @@ def generation_all(
             f.write(response.content)
         
         # Load the mesh for stats
-        mesh = trimesh.load(temp_path)
+        # mesh = trimesh.load(temp_path)
+        scene = trimesh.load(temp_path)
+        mesh = scene.geometry[list(scene.geometry.keys())[0]]  # Get the first mesh from the scene
         
         # Prepare stats
         stats = {
@@ -383,10 +390,23 @@ def generation_all(
             'number_of_faces': mesh.faces.shape[0],
             'number_of_vertices': mesh.vertices.shape[0],
         }
+
+        print("--------------------------------")
+        print("successfully loaded the mesh..........")
+        print("--------------------------------")
+
         
         # Create viewer HTML
         model_viewer_html_textured = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH, textured=True)
         
+        print("--------------------------------")
+        print("successfully built the model viewer html..........")
+        print("--------------------------------")
+
+        print("--------------------------------")
+        print("returning the results..........")
+        print("--------------------------------")
+
         return (
             gr.update(value=temp_path),  # For the untextured version (same file)
             gr.update(value=temp_path),  # For the textured version
@@ -447,28 +467,23 @@ def shape_generation(
 
 
 def build_app():
-    title = 'Hunyuan3D-2: High Resolution Textured 3D Assets Generation'
+    title = 'OfiBox: 3D Game Asset Generator for Developers'
     if MV_MODE:
-        title = 'Hunyuan3D-2mv: Image to 3D Generation with 1-4 Views'
+        title = 'OfiBox Multi-View: Image to 3D Game Asset Generation'
     if 'mini' in args.subfolder:
-        title = 'Hunyuan3D-2mini: Strong 0.6B Image to Shape Generator'
+        title = 'OfiBox Mini: Fast 3D Game Asset Generator'
     if TURBO_MODE:
         title = title.replace(':', '-Turbo: Fast ')
 
     title_html = f"""
-    <div style="font-size: 2em; font-weight: bold; text-align: center; margin-bottom: 5px">
-
+    <div style=\"font-size: 2em; font-weight: bold; text-align: center; margin-bottom: 5px\">
     {title}
     </div>
-    <div align="center">
-    Tencent Hunyuan3D Team
+    <div align=\"center\">
+    Powered by OfiBox Team
     </div>
-    <div align="center">
-      <a href="https://github.com/tencent/Hunyuan3D-2">Github</a> &ensp; 
-      <a href="http://3d-models.hunyuan.tencent.com">Homepage</a> &ensp;
-      <a href="https://3d.hunyuan.tencent.com">Hunyuan3D Studio</a> &ensp;
-      <a href="#">Technical Report</a> &ensp;
-      <a href="https://huggingface.co/Tencent/Hunyuan3D-2"> Pretrained Models</a> &ensp;
+    <div align=\"center\">
+      <a href=\"https://ofibox.com\">OfiBox Homepage</a>
     </div>
     """
     custom_css = """
@@ -495,9 +510,9 @@ def build_app():
                         image = gr.Image(label='Image', type='pil', image_mode='RGBA', height=290)
 
                     with gr.Tab('Text Prompt', id='tab_txt_prompt', visible=True and not MV_MODE) as tab_tp:
-                        caption = gr.Textbox(label='Text Prompt',
-                                             placeholder='HunyuanDiT will be used to generate image.',
-                                             info='Example: A 3D model of a cute cat, white background')
+                        caption = gr.Textbox(label='Asset Description',
+                                             placeholder='Describe the game asset you want to generate (e.g., "A medieval treasure chest for a fantasy RPG")',
+                                             info='Example: A 3D model of a futuristic robot, suitable for a sci-fi game')
                     with gr.Tab('MultiView Prompt', visible=MV_MODE) as tab_mv:
                         # gr.Label('Please upload at least one front image.')
                         with gr.Row():
@@ -638,7 +653,7 @@ def build_app():
 
         gr.HTML(f"""
         <div align="center">
-        Using API Server for 3D Model Generation
+        Using OfiBox API Server for 3D Game Asset Generation
         </div>
         """)
         # if not HAS_TEXTUREGEN:
@@ -834,8 +849,8 @@ if __name__ == '__main__':
     HTML_OUTPUT_PLACEHOLDER = f"""
     <div style='height: {650}px; width: 100%; border-radius: 8px; border-color: #e5e7eb; border-style: solid; border-width: 1px; display: flex; justify-content: center; align-items: center;'>
       <div style='text-align: center; font-size: 16px; color: #6b7280;'>
-        <p style="color: #8d8d8d;">Welcome to Hunyuan3D!</p>
-        <p style="color: #8d8d8d;">No mesh here.</p>
+        <p style=\"color: #8d8d8d;\">Welcome to OfiBox!</p>
+        <p style=\"color: #8d8d8d;\">No asset generated yet.</p>
       </div>
     </div>
     """
