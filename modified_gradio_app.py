@@ -36,6 +36,7 @@ import base64
 from io import BytesIO
 
 API_BASE_URL = "http://localhost:8081"  # or whatever port your api_server is running on
+HAS_T2I=True
 
 def call_api_generate(params):
     """Helper function to call the generate endpoint"""
@@ -493,7 +494,7 @@ def build_app():
                     with gr.Tab('Image Prompt', id='tab_img_prompt', visible=not MV_MODE) as tab_ip:
                         image = gr.Image(label='Image', type='pil', image_mode='RGBA', height=290)
 
-                    with gr.Tab('Text Prompt', id='tab_txt_prompt', visible=HAS_T2I and not MV_MODE) as tab_tp:
+                    with gr.Tab('Text Prompt', id='tab_txt_prompt', visible=True and not MV_MODE) as tab_tp:
                         caption = gr.Textbox(label='Text Prompt',
                                              placeholder='HunyuanDiT will be used to generate image.',
                                              info='Example: A 3D model of a cute cat, white background')
@@ -511,25 +512,17 @@ def build_app():
                                                       min_width=100, elem_classes='mv-image')
 
                 with gr.Row():
-                    btn = gr.Button(value='Gen Shape', variant='primary', min_width=100)
-                    btn_all = gr.Button(value='Gen Textured Shape',
+                    # btn = gr.Button(value='Gen Shape', variant='primary', min_width=100)
+                    btn_all = gr.Button(value='Generate 3D Model',
                                         variant='primary',
-                                        visible=HAS_TEXTUREGEN,
+                                        # visible=HAS_TEXTUREGEN,
                                         min_width=100)
 
                 with gr.Group():
                     file_out = gr.File(label="File", visible=False)
                     file_out2 = gr.File(label="File", visible=False)
 
-                with gr.Tabs(selected='tab_options' if TURBO_MODE else 'tab_export'):
-                    with gr.Tab("Options", id='tab_options', visible=TURBO_MODE):
-                        gen_mode = gr.Radio(label='Generation Mode',
-                                            info='Recommendation: Turbo for most cases, Fast for very complex cases, Standard seldom use.',
-                                            choices=['Turbo', 'Fast', 'Standard'], value='Turbo')
-                        decode_mode = gr.Radio(label='Decoding Mode',
-                                               info='The resolution for exporting mesh from generated vectset',
-                                               choices=['Low', 'Standard', 'High'],
-                                               value='Standard')
+                with gr.Tabs(selected='tab_advanced_options'):
                     with gr.Tab('Advanced Options', id='tab_advanced_options'):
                         with gr.Row():
                             check_box_rembg = gr.Checkbox(value=True, label='Remove Background', min_width=100)
@@ -544,27 +537,72 @@ def build_app():
                         )
                         with gr.Row():
                             num_steps = gr.Slider(maximum=100,
-                                                  minimum=1,
-                                                  value=5 if 'turbo' in args.subfolder else 30,
-                                                  step=1, label='Inference Steps')
+                                                minimum=1,
+                                                value=5,  # Default to 5 for API
+                                                step=1, label='Inference Steps')
                             octree_resolution = gr.Slider(maximum=512, minimum=16, value=256, label='Octree Resolution')
                         with gr.Row():
                             cfg_scale = gr.Number(value=5.0, label='Guidance Scale', min_width=100)
                             num_chunks = gr.Slider(maximum=5000000, minimum=1000, value=8000,
-                                                   label='Number of Chunks', min_width=100)
+                                                label='Number of Chunks', min_width=100)
                     with gr.Tab("Export", id='tab_export'):
                         with gr.Row():
                             file_type = gr.Dropdown(label='File Type', choices=SUPPORTED_FORMATS,
                                                     value='glb', min_width=100)
                             reduce_face = gr.Checkbox(label='Simplify Mesh', value=False, min_width=100)
-                            export_texture = gr.Checkbox(label='Include Texture', value=False,
-                                                         visible=False, min_width=100)
+                            export_texture = gr.Checkbox(label='Include Texture', value=True,
+                                                        visible=True, min_width=100)  # Always visible and true
                         target_face_num = gr.Slider(maximum=1000000, minimum=100, value=10000,
                                                     label='Target Face Number')
                         with gr.Row():
                             confirm_export = gr.Button(value="Transform", min_width=100)
                             file_export = gr.DownloadButton(label="Download", variant='primary',
                                                             interactive=False, min_width=100)
+
+                # with gr.Tabs(selected='tab_options' if TURBO_MODE else 'tab_export'):
+                #     with gr.Tab("Options", id='tab_options', visible=TURBO_MODE):
+                #         gen_mode = gr.Radio(label='Generation Mode',
+                #                             info='Recommendation: Turbo for most cases, Fast for very complex cases, Standard seldom use.',
+                #                             choices=['Turbo', 'Fast', 'Standard'], value='Turbo')
+                #         decode_mode = gr.Radio(label='Decoding Mode',
+                #                                info='The resolution for exporting mesh from generated vectset',
+                #                                choices=['Low', 'Standard', 'High'],
+                #                                value='Standard')
+                #     with gr.Tab('Advanced Options', id='tab_advanced_options'):
+                #         with gr.Row():
+                #             check_box_rembg = gr.Checkbox(value=True, label='Remove Background', min_width=100)
+                #             randomize_seed = gr.Checkbox(label="Randomize seed", value=True, min_width=100)
+                #         seed = gr.Slider(
+                #             label="Seed",
+                #             minimum=0,
+                #             maximum=MAX_SEED,
+                #             step=1,
+                #             value=1234,
+                #             min_width=100,
+                #         )
+                #         with gr.Row():
+                #             num_steps = gr.Slider(maximum=100,
+                #                                   minimum=1,
+                #                                   value=5 if 'turbo' in args.subfolder else 30,
+                #                                   step=1, label='Inference Steps')
+                #             octree_resolution = gr.Slider(maximum=512, minimum=16, value=256, label='Octree Resolution')
+                #         with gr.Row():
+                #             cfg_scale = gr.Number(value=5.0, label='Guidance Scale', min_width=100)
+                #             num_chunks = gr.Slider(maximum=5000000, minimum=1000, value=8000,
+                #                                    label='Number of Chunks', min_width=100)
+                #     with gr.Tab("Export", id='tab_export'):
+                #         with gr.Row():
+                #             file_type = gr.Dropdown(label='File Type', choices=SUPPORTED_FORMATS,
+                #                                     value='glb', min_width=100)
+                #             reduce_face = gr.Checkbox(label='Simplify Mesh', value=False, min_width=100)
+                #             export_texture = gr.Checkbox(label='Include Texture', value=False,
+                #                                          visible=False, min_width=100)
+                #         target_face_num = gr.Slider(maximum=1000000, minimum=100, value=10000,
+                #                                     label='Target Face Number')
+                #         with gr.Row():
+                #             confirm_export = gr.Button(value="Transform", min_width=100)
+                #             file_export = gr.DownloadButton(label="Download", variant='primary',
+                #                                             interactive=False, min_width=100)
 
             with gr.Column(scale=6):
                 with gr.Tabs(selected='gen_mesh_panel') as tabs_output:
@@ -592,57 +630,64 @@ def build_app():
                                         inputs=[mv_image_front, mv_image_back, mv_image_left, mv_image_right],
                                         label=None, examples_per_page=6)
 
+        # gr.HTML(f"""
+        # <div align="center">
+        # Activated Model - Shape Generation ({args.model_path}/{args.subfolder}) ; Texture Generation ({'Hunyuan3D-2' if HAS_TEXTUREGEN else 'Unavailable'})
+        # </div>
+        # """)
+
         gr.HTML(f"""
         <div align="center">
-        Activated Model - Shape Generation ({args.model_path}/{args.subfolder}) ; Texture Generation ({'Hunyuan3D-2' if HAS_TEXTUREGEN else 'Unavailable'})
+        Using API Server for 3D Model Generation
         </div>
         """)
-        if not HAS_TEXTUREGEN:
-            gr.HTML("""
-            <div style="margin-top: 5px;"  align="center">
-                <b>Warning: </b>
-                Texture synthesis is disable due to missing requirements,
-                 please install requirements following <a href="https://github.com/Tencent/Hunyuan3D-2?tab=readme-ov-file#install-requirements">README.md</a>to activate it.
-            </div>
-            """)
-        if not args.enable_t23d:
-            gr.HTML("""
-            <div style="margin-top: 5px;"  align="center">
-                <b>Warning: </b>
-                Text to 3D is disable. To activate it, please run `python gradio_app.py --enable_t23d`.
-            </div>
-            """)
+        # if not HAS_TEXTUREGEN:
+        #     gr.HTML("""
+        #     <div style="margin-top: 5px;"  align="center">
+        #         <b>Warning: </b>
+        #         Texture synthesis is disable due to missing requirements,
+        #          please install requirements following <a href="https://github.com/Tencent/Hunyuan3D-2?tab=readme-ov-file#install-requirements">README.md</a>to activate it.
+        #     </div>
+        #     """)
+        # if not args.enable_t23d:
+        #     gr.HTML("""
+        #     <div style="margin-top: 5px;"  align="center">
+        #         <b>Warning: </b>
+        #         Text to 3D is disable. To activate it, please run `python gradio_app.py --enable_t23d`.
+        #     </div>
+        #     """)
 
         tab_ip.select(fn=lambda: gr.update(selected='tab_img_gallery'), outputs=gallery)
-        if HAS_T2I:
-            tab_tp.select(fn=lambda: gr.update(selected='tab_txt_gallery'), outputs=gallery)
+        
+        # if HAS_T2I:
+        tab_tp.select(fn=lambda: gr.update(selected='tab_txt_gallery'), outputs=gallery)
 
-        btn.click(
-            shape_generation,
-            inputs=[
-                caption,
-                image,
-                mv_image_front,
-                mv_image_back,
-                mv_image_left,
-                mv_image_right,
-                num_steps,
-                cfg_scale,
-                seed,
-                octree_resolution,
-                check_box_rembg,
-                num_chunks,
-                randomize_seed,
-            ],
-            outputs=[file_out, html_gen_mesh, stats, seed]
-        ).then(
-            lambda: (gr.update(visible=False, value=False), gr.update(interactive=True), gr.update(interactive=True),
-                     gr.update(interactive=False)),
-            outputs=[export_texture, reduce_face, confirm_export, file_export],
-        ).then(
-            lambda: gr.update(selected='gen_mesh_panel'),
-            outputs=[tabs_output],
-        )
+        # btn.click(
+        #     shape_generation,
+        #     inputs=[
+        #         caption,
+        #         image,
+        #         mv_image_front,
+        #         mv_image_back,
+        #         mv_image_left,
+        #         mv_image_right,
+        #         num_steps,
+        #         cfg_scale,
+        #         seed,
+        #         octree_resolution,
+        #         check_box_rembg,
+        #         num_chunks,
+        #         randomize_seed,
+        #     ],
+        #     outputs=[file_out, html_gen_mesh, stats, seed]
+        # ).then(
+        #     lambda: (gr.update(visible=False, value=False), gr.update(interactive=True), gr.update(interactive=True),
+        #              gr.update(interactive=False)),
+        #     outputs=[export_texture, reduce_face, confirm_export, file_export],
+        # ).then(
+        #     lambda: gr.update(selected='gen_mesh_panel'),
+        #     outputs=[tabs_output],
+        # )
 
         btn_all.click(
             generation_all,
@@ -671,25 +716,26 @@ def build_app():
             outputs=[tabs_output],
         )
 
-        def on_gen_mode_change(value):
-            if value == 'Turbo':
-                return gr.update(value=5)
-            elif value == 'Fast':
-                return gr.update(value=10)
-            else:
-                return gr.update(value=30)
+        # def on_gen_mode_change(value):
+        #     if value == 'Turbo':
+        #         return gr.update(value=5)
+        #     elif value == 'Fast':
+        #         return gr.update(value=10)
+        #     else:
+        #         return gr.update(value=30)
 
-        gen_mode.change(on_gen_mode_change, inputs=[gen_mode], outputs=[num_steps])
+        # gen_mode.change(on_gen_mode_change, inputs=[gen_mode], outputs=[num_steps])
 
-        def on_decode_mode_change(value):
-            if value == 'Low':
-                return gr.update(value=196)
-            elif value == 'Standard':
-                return gr.update(value=256)
-            else:
-                return gr.update(value=384)
+        # def on_decode_mode_change(value):
+        #     if value == 'Low':
+        #         return gr.update(value=196)
+        #     elif value == 'Standard':
+        #         return gr.update(value=256)
+        #     else:
+        #         return gr.update(value=384)
 
-        decode_mode.change(on_decode_mode_change, inputs=[decode_mode], outputs=[octree_resolution])
+        # decode_mode.change(on_decode_mode_change, inputs=[decode_mode], outputs=[octree_resolution])
+
 
         def on_export_click(file_out, file_out2, file_type, reduce_face, export_texture, target_face_num):
             if file_out is None:
@@ -697,32 +743,53 @@ def build_app():
 
             print(f'exporting {file_out}')
             print(f'reduce face to {target_face_num}')
-            if export_texture:
-                mesh = trimesh.load(file_out2)
-                save_folder = gen_save_folder()
-                path = export_mesh(mesh, save_folder, textured=True, type=file_type)
+            
+            # Always use the textured version
+            mesh = trimesh.load(file_out2)
+            save_folder = gen_save_folder()
+            path = export_mesh(mesh, save_folder, textured=True, type=file_type)
 
-                # for preview
-                save_folder = gen_save_folder()
-                _ = export_mesh(mesh, save_folder, textured=True)
-                model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH,
-                                                            textured=True)
-            else:
-                mesh = trimesh.load(file_out)
-                mesh = floater_remove_worker(mesh)
-                mesh = degenerate_face_remove_worker(mesh)
-                if reduce_face:
-                    mesh = face_reduce_worker(mesh, target_face_num)
-                save_folder = gen_save_folder()
-                path = export_mesh(mesh, save_folder, textured=False, type=file_type)
-
-                # for preview
-                save_folder = gen_save_folder()
-                _ = export_mesh(mesh, save_folder, textured=False)
-                model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH,
-                                                            textured=False)
+            # for preview
+            save_folder = gen_save_folder()
+            _ = export_mesh(mesh, save_folder, textured=True)
+            model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH,
+                                                        textured=True)
+            
             print(f'export to {path}')
             return model_viewer_html, gr.update(value=path, interactive=True)
+
+        # def on_export_click(file_out, file_out2, file_type, reduce_face, export_texture, target_face_num):
+        #     if file_out is None:
+        #         raise gr.Error('Please generate a mesh first.')
+
+        #     print(f'exporting {file_out}')
+        #     print(f'reduce face to {target_face_num}')
+        #     if export_texture:
+        #         mesh = trimesh.load(file_out2)
+        #         save_folder = gen_save_folder()
+        #         path = export_mesh(mesh, save_folder, textured=True, type=file_type)
+
+        #         # for preview
+        #         save_folder = gen_save_folder()
+        #         _ = export_mesh(mesh, save_folder, textured=True)
+        #         model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH,
+        #                                                     textured=True)
+        #     else:
+        #         mesh = trimesh.load(file_out)
+        #         mesh = floater_remove_worker(mesh)
+        #         mesh = degenerate_face_remove_worker(mesh)
+        #         if reduce_face:
+        #             mesh = face_reduce_worker(mesh, target_face_num)
+        #         save_folder = gen_save_folder()
+        #         path = export_mesh(mesh, save_folder, textured=False, type=file_type)
+
+        #         # for preview
+        #         save_folder = gen_save_folder()
+        #         _ = export_mesh(mesh, save_folder, textured=False)
+        #         model_viewer_html = build_model_viewer_html(save_folder, height=HTML_HEIGHT, width=HTML_WIDTH,
+        #                                                     textured=False)
+        #     print(f'export to {path}')
+        #     return model_viewer_html, gr.update(value=path, interactive=True)
 
         confirm_export.click(
             lambda: gr.update(selected='export_mesh_panel'),
