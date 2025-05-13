@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-API_URL = 'http://184.105.6.192:8081'
+API_URL = 'http://184.105.4.15:8081'
 
 # Configuration
 APP_CONFIG = {

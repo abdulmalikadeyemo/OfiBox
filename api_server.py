@@ -227,6 +227,7 @@ class ModelWorker:
                         device=device
                     )
                     logger.info("Text-to-image pipeline initialized successfully")
+                    print("Text-to-image pipeline initialized successfully")
                 except Exception as e:
                     logger.error(f"Failed to initialize text-to-image pipeline: {e}")
                     # Don't assign pipeline_t2i if initialization fails
@@ -235,6 +236,7 @@ class ModelWorker:
                 tex_model_path = ensure_model_exists(tex_model_path, "texture", self.models_dir)
                 self.pipeline_tex = Hunyuan3DPaintPipeline.from_pretrained(tex_model_path)
                 logger.info("Texture pipeline initialized successfully")
+                print("Texture pipeline initialized successfully")
                 
         except Exception as e:
             logger.error(f"Error initializing model worker: {e}")
@@ -287,12 +289,13 @@ class ModelWorker:
             mesh = self.pipeline(**params)[0]
             logger.info("--- %s seconds ---" % (time.time() - start_time))
 
-        if params.get('texture', False):
+        if params.get('texture', True):
             if hasattr(self, 'pipeline_tex'):
                 mesh = FloaterRemover()(mesh)
                 mesh = DegenerateFaceRemover()(mesh)
                 mesh = FaceReducer()(mesh, max_facenum=params.get('face_count', 40000))
                 mesh = self.pipeline_tex(mesh, image)
+                print("Texture pipeline applied to mesh successfully")
             else:
                 logger.warning("Texture pipeline requested but not initialized")
 
