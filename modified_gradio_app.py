@@ -35,7 +35,7 @@ import requests
 import base64
 from io import BytesIO
 
-API_BASE_URL = "http://184.105.4.46:8081"  # or whatever port your api_server is running on
+API_BASE_URL = "http://dd639f591b7144c7f842ee9ef8e0b4eb5.clg07azjl.paperspacegradient.com"  # or whatever port your api_server is running on
 HAS_T2I=True
 
 def call_api_generate(params):
