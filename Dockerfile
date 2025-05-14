@@ -1,9 +1,14 @@
-FROM --platform=linux/amd64 paperspace/fastapi-deployment:latest
+# Use a base image with CUDA 12.6 to match PyTorch
+FROM --platform=linux/amd64 pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+
+# Install FastAPI and other dependencies
+RUN pip install fastapi uvicorn
 
 WORKDIR /app
 
 COPY . /app
 
+# Install dependencies
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # Install custom rasterizer extension
