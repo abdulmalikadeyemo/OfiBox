@@ -6,11 +6,20 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
-# Install build essentials and CUDA development tools needed for custom extensions
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
-    cuda-toolkit-12-1 \
+    wget \
+    gnupg2 \
     && rm -rf /var/lib/apt/lists/*
+
+# Add NVIDIA repository and install CUDA toolkit
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.0-1_all.deb && \
+    dpkg -i cuda-keyring_1.0-1_all.deb && \
+    apt-get update && \
+    apt-get install -y cuda-toolkit-12-1 && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm cuda-keyring_1.0-1_all.deb
 
 # Install FastAPI and other dependencies
 RUN pip install fastapi uvicorn
