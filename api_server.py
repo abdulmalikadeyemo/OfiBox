@@ -310,6 +310,41 @@ class ModelWorker:
         return save_path, uid
 
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--host", type=str, default="0.0.0.0")
+parser.add_argument("--port", type=int, default=8081)
+parser.add_argument("--model_path", type=str, default='tencent/Hunyuan3D-2mini')
+parser.add_argument("--tex_model_path", type=str, default='tencent/Hunyuan3D-2')
+parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--limit-model-concurrency", type=int, default=5)
+parser.add_argument('--enable_tex', action='store_true', default=True)
+parser.add_argument('--enable_t2i', action='store_true', default=True, help='Enable text-to-image pipeline')
+parser.add_argument('--subfolder', type=str, default='hunyuan3d-dit-v2-mini-turbo', help='Subfolder for the model')
+parser.add_argument('--models_dir', type=str, default=MODELS_DIR, help='Directory to store model cache')
+args = parser.parse_args()
+
+# Create models directory from args
+models_dir = args.models_dir
+os.makedirs(models_dir, exist_ok=True)
+
+# Set HF_HOME for model caching
+os.environ['HF_HOME'] = models_dir
+
+logger.info(f"args: {args}")
+logger.info(f"Models directory: {models_dir}")
+model_semaphore = asyncio.Semaphore(args.limit_model_concurrency)
+
+
+worker = ModelWorker(
+    model_path=args.model_path, 
+    device=args.device, 
+    enable_tex=args.enable_tex,
+    tex_model_path=args.tex_model_path, 
+    subfolder=args.subfolder, 
+    enable_t2i=args.enable_t2i,
+    models_dir=models_dir
+)
+
 app = FastAPI()
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.websockets import WebSocket, WebSocketDisconnect
@@ -456,41 +491,9 @@ async def status(uid: str):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8081)
-    parser.add_argument("--model_path", type=str, default='tencent/Hunyuan3D-2mini')
-    parser.add_argument("--tex_model_path", type=str, default='tencent/Hunyuan3D-2')
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--limit-model-concurrency", type=int, default=5)
-    parser.add_argument('--enable_tex', action='store_true', default=True)
-    parser.add_argument('--enable_t2i', action='store_true', default=True, help='Enable text-to-image pipeline')
-    parser.add_argument('--subfolder', type=str, default='hunyuan3d-dit-v2-mini-turbo', help='Subfolder for the model')
-    parser.add_argument('--models_dir', type=str, default=MODELS_DIR, help='Directory to store model cache')
-    args = parser.parse_args()
-    
-    # Create models directory from args
-    models_dir = args.models_dir
-    os.makedirs(models_dir, exist_ok=True)
-    
-    # Set HF_HOME for model caching
-    os.environ['HF_HOME'] = models_dir
-    
-    logger.info(f"args: {args}")
-    logger.info(f"Models directory: {models_dir}")
-    model_semaphore = asyncio.Semaphore(args.limit_model_concurrency)
 
     try:
-        worker = ModelWorker(
-            model_path=args.model_path, 
-            device=args.device, 
-            enable_tex=args.enable_tex,
-            tex_model_path=args.tex_model_path, 
-            subfolder=args.subfolder, 
-            enable_t2i=args.enable_t2i,
-            models_dir=models_dir
-        )
-        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
     except Exception as e:
         logger.error(f"Failed to start server: {e}")
         sys.exit(1)
