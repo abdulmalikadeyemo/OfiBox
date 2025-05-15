@@ -27,7 +27,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 import uuid
 
-from hy3dgen.shapegen.utils import logger
+# from hy3dgen.shapegen.utils import logger
 
 MAX_SEED = int(1e7)
 
