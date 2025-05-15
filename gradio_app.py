@@ -25,6 +25,7 @@ import trimesh
 import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import uuid
 
 # from hy3dgen.shapegen.utils import logger
@@ -700,6 +701,16 @@ if __name__ == '__main__':
 
     # create a FastAPI app
     app = FastAPI()
+
+    # Enable CORS for all origins
+    # from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Or specify allowed origins
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     # create a static directory to store the static files
     static_dir = Path(SAVE_DIR).absolute()
     static_dir.mkdir(parents=True, exist_ok=True)
