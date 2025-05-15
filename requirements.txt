@@ -1,43 +1,36 @@
-ninja
-pybind11
-
-diffusers
-einops
-opencv-python
-numpy
-#torch
-transformers
-#torchvision
-taming-transformers-rom1504
-ConfigArgParse
-ipdb
-omegaconf
-
-sentencepiece
-tqdm
-
-# Mesh Processing
-trimesh
-pymeshlab
-pygltflib
-xatlas
-kornia
-facexlib
-
-# Training
-accelerate
-#pytorch_lightning
-scikit-learn
-scikit-image
-
-# Demo only
+# Core dependencies for gradio_app.py
 gradio
 fastapi
 uvicorn
-rembg
-onnxruntime
-#gevent
-#geventhttpclient
+trimesh
+requests
+numpy
 
-# Model management
-huggingface_hub>=0.14.1
+# Optional: for mesh simplification/export (used in export, not core API)
+# pymeshlab
+
+# Optional: for background removal (used if check_box_rembg is enabled)
+# rembg
+# onnxruntime
+
+# The rest are not needed for gradio_app.py
+# ninja
+# pybind11
+# diffusers
+# einops
+# opencv-python
+# transformers
+# taming-transformers-rom1504
+# ConfigArgParse
+# ipdb
+# omegaconf
+# sentencepiece
+# tqdm
+# pygltflib
+# xatlas
+# kornia
+# facexlib
+# accelerate
+# scikit-learn
+# scikit-image
+# huggingface_hub>=0.14.1
